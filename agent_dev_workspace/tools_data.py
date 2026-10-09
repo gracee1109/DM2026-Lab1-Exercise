@@ -1,8 +1,11 @@
 """Tools for data loading, inspection, and preparation."""
 
-from typing import Any, Dict, List
+import os
+from typing import Any, Dict, List, Optional
+import matplotlib.pyplot as plt
 import nltk
 import pandas as pd
+import seaborn as sns
 from langchain_core.tools import tool
 
 # Ensure punkt is available for nltk word tokenization
@@ -19,6 +22,62 @@ except LookupError:
 
 def make_tools(session):
     """Factory that creates data manipulation and inspection tools bound to session."""
+
+    @tool
+    def list_files_tool(subdirectory: str = ".") -> Dict[str, Any]:
+        """Lists files and directories in the workspace or a specified subdirectory.
+
+        Args:
+            subdirectory: Subdirectory path relative to workspace root (default ".").
+
+        Returns:
+            Dict containing result_id, subdirectory, directories list, and files list.
+        """
+        target_path = subdirectory
+        if not os.path.exists(target_path):
+            result_id = session.next_result_id("list_files")
+            summary = {
+                "result_id": result_id,
+                "status": "error",
+                "message": f"Path '{subdirectory}' does not exist.",
+            }
+            session.store_result("list_files_tool", {"subdirectory": subdirectory}, summary)
+            return summary
+
+        directories = []
+        files = []
+
+        try:
+            entries = os.listdir(target_path)
+            for entry in sorted(entries):
+                if entry.startswith("."):
+                    continue
+                full_entry = os.path.join(target_path, entry)
+                if os.path.isdir(full_entry):
+                    directories.append(entry)
+                else:
+                    files.append(entry)
+        except Exception as e:
+            result_id = session.next_result_id("list_files")
+            summary = {
+                "result_id": result_id,
+                "status": "error",
+                "message": str(e),
+            }
+            session.store_result("list_files_tool", {"subdirectory": subdirectory}, summary)
+            return summary
+
+        result_id = session.next_result_id("list_files")
+        summary = {
+            "result_id": result_id,
+            "status": "success",
+            "subdirectory": subdirectory,
+            "directories": directories,
+            "files": files,
+        }
+
+        session.store_result("list_files_tool", {"subdirectory": subdirectory}, summary)
+        return summary
 
     @tool
     def inspect_data_tool(n: int = 5) -> Dict[str, Any]:
@@ -57,6 +116,235 @@ def make_tools(session):
         }
 
         session.store_result("inspect_data_tool", {"n": n}, summary)
+        return summary
+
+    @tool
+    def check_missing_tool(column: str = "text") -> Dict[str, Any]:
+        """Checks for missing or empty text values in the specified column of session.dataframe.
+
+        Args:
+            column: Name of the text column to inspect for missing/empty values (default "text").
+
+        Returns:
+            Dict containing result_id, total_rows, n_missing, missing_indices, and missing_pct.
+        """
+        if session.dataframe is None:
+            result_id = session.next_result_id("check_missing")
+            summary = {
+                "result_id": result_id,
+                "status": "error",
+                "message": "No dataset currently loaded in session. Load a dataset first.",
+            }
+            session.store_result("check_missing_tool", {"column": column}, summary)
+            return summary
+
+        if column not in session.dataframe.columns:
+            result_id = session.next_result_id("check_missing")
+            summary = {
+                "result_id": result_id,
+                "status": "error",
+                "message": f"Column '{column}' not found in working DataFrame.",
+            }
+            session.store_result("check_missing_tool", {"column": column}, summary)
+            return summary
+
+        result_id = session.next_result_id("check_missing")
+        series = session.dataframe[column]
+
+        missing_mask = series.isna() | series.astype(str).str.strip().eq("")
+        missing_indices = series[missing_mask].index.tolist()
+
+        total_rows = len(series)
+        n_missing = len(missing_indices)
+        missing_pct = round(100.0 * n_missing / total_rows, 4) if total_rows > 0 else 0.0
+
+        summary = {
+            "result_id": result_id,
+            "status": "success",
+            "column": column,
+            "total_rows": total_rows,
+            "n_missing": n_missing,
+            "missing_indices": missing_indices,
+            "missing_pct": missing_pct,
+        }
+
+        session.store_result("check_missing_tool", {"column": column}, summary)
+        return summary
+
+    @tool
+    def check_duplicates_tool(column: str = "text", drop: bool = False) -> Dict[str, Any]:
+        """Checks for and optionally drops duplicate document rows in session.dataframe.
+
+        When drop=True, uses keep=False to drop every copy of a duplicated row, matching
+        X.drop_duplicates(keep=False, inplace=True).
+
+        Args:
+            column: Column name to check for duplicate content (default "text").
+            drop: Whether to drop duplicate rows from session.dataframe (default False).
+
+        Returns:
+            Dict containing result_id, n_duplicates, n_rows_before, n_rows_after, and dropped.
+        """
+        if session.dataframe is None:
+            result_id = session.next_result_id("check_duplicates")
+            summary = {
+                "result_id": result_id,
+                "status": "error",
+                "message": "No dataset currently loaded in session. Load a dataset first.",
+            }
+            session.store_result("check_duplicates_tool", {"column": column, "drop": drop}, summary)
+            return summary
+
+        if column not in session.dataframe.columns:
+            result_id = session.next_result_id("check_duplicates")
+            summary = {
+                "result_id": result_id,
+                "status": "error",
+                "message": f"Column '{column}' not found in working DataFrame.",
+            }
+            session.store_result("check_duplicates_tool", {"column": column, "drop": drop}, summary)
+            return summary
+
+        result_id = session.next_result_id("check_duplicates")
+        df = session.dataframe
+        n_rows_before = len(df)
+
+        dup_mask_extra = df.duplicated(subset=[column], keep="first")
+        n_duplicates = int(dup_mask_extra.sum())
+
+        if drop:
+            clean_df = df.drop_duplicates(subset=[column], keep=False).reset_index(drop=True)
+            session.dataframe = clean_df
+            n_rows_after = len(clean_df)
+        else:
+            n_rows_after = n_rows_before
+
+        summary = {
+            "result_id": result_id,
+            "status": "success",
+            "column": column,
+            "n_duplicates": n_duplicates,
+            "n_rows_before": n_rows_before,
+            "n_rows_after": n_rows_after,
+            "dropped": drop,
+        }
+
+        session.store_result("check_duplicates_tool", {"column": column, "drop": drop}, summary)
+        return summary
+
+    @tool
+    def sample_data_tool(n: int = 5, random_state: Optional[int] = 42) -> Dict[str, Any]:
+        """Subsamples n rows from session.dataframe.
+
+        Args:
+            n: Number of rows to sample (default 5).
+            random_state: Seed for reproducible sampling (default 42).
+
+        Returns:
+            Dict containing result_id, sampled_indices, n_sampled, and sample_rows.
+        """
+        if session.dataframe is None:
+            result_id = session.next_result_id("sample_data")
+            summary = {
+                "result_id": result_id,
+                "status": "error",
+                "message": "No dataset currently loaded in session. Load a dataset first.",
+            }
+            session.store_result("sample_data_tool", {"n": n, "random_state": random_state}, summary)
+            return summary
+
+        df = session.dataframe
+        sample_n = min(n, len(df))
+        sampled_df = df.sample(n=sample_n, random_state=random_state)
+        sampled_indices = sampled_df.index.tolist()
+
+        result_id = session.next_result_id("sample_data")
+        summary = {
+            "result_id": result_id,
+            "status": "success",
+            "n_requested": n,
+            "n_sampled": len(sampled_df),
+            "random_state": random_state,
+            "sampled_indices": sampled_indices,
+            "rows": sampled_df.to_dict(orient="records"),
+        }
+
+        session.store_result("sample_data_tool", {"n": n, "random_state": random_state}, summary)
+        return summary
+
+    @tool
+    def describe_data_tool(column: str = "text") -> Dict[str, Any]:
+        """Calculates text length statistics and generates a boxplot by category.
+
+        Computes character length df[column].apply(len), returns overall and per-category
+        summary statistics, and builds a Seaborn boxplot set on session.pending_figure.
+
+        Args:
+            column: Name of the text column to analyze (default "text").
+
+        Returns:
+            Dict containing result_id, overall_stats, and category_stats.
+        """
+        if session.dataframe is None:
+            result_id = session.next_result_id("describe_data")
+            summary = {
+                "result_id": result_id,
+                "status": "error",
+                "message": "No dataset currently loaded in session. Load a dataset first.",
+            }
+            session.store_result("describe_data_tool", {"column": column}, summary)
+            return summary
+
+        if column not in session.dataframe.columns:
+            result_id = session.next_result_id("describe_data")
+            summary = {
+                "result_id": result_id,
+                "status": "error",
+                "message": f"Column '{column}' not found in working DataFrame.",
+            }
+            session.store_result("describe_data_tool", {"column": column}, summary)
+            return summary
+
+        df = session.dataframe.copy()
+        
+        # Calculate character length
+        df["text_length"] = df[column].astype(str).fillna("").apply(len)
+
+        overall_stats = df["text_length"].describe().to_dict()
+
+        # Categorical column identification
+        cat_col = None
+        if "category_name" in df.columns:
+            cat_col = "category_name"
+        elif "label" in df.columns:
+            cat_col = "label"
+
+        category_stats = {}
+        if cat_col:
+            grouped = df.groupby(cat_col)["text_length"]
+            for name, group in grouped:
+                category_stats[str(name)] = group.describe().to_dict()
+
+            # Plot boxplot grouped by category
+            fig, ax = plt.subplots(figsize=(8, 6))
+            sns.boxplot(data=df, x=cat_col, y="text_length", ax=ax)
+            ax.set_title(f"Text Length Distribution by {cat_col}")
+            ax.set_xlabel("Category")
+            ax.set_ylabel("Text Length (characters)")
+            fig.tight_layout()
+            session.pending_figure = fig
+
+        result_id = session.next_result_id("describe_data")
+
+        summary = {
+            "result_id": result_id,
+            "status": "success",
+            "column": column,
+            "overall_stats": overall_stats,
+            "category_stats": category_stats,
+        }
+
+        session.store_result("describe_data_tool", {"column": column}, summary)
         return summary
 
     @tool
@@ -126,4 +414,12 @@ def make_tools(session):
         session.store_result("tokenize_tool", {"column": column}, summary)
         return summary
 
-    return [inspect_data_tool, tokenize_tool]
+    return [
+        list_files_tool,
+        inspect_data_tool,
+        check_missing_tool,
+        check_duplicates_tool,
+        sample_data_tool,
+        describe_data_tool,
+        tokenize_tool,
+    ]

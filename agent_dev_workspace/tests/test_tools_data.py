@@ -1,5 +1,6 @@
 """Tests for tools_data.py tools."""
 
+import numpy as np
 import pytest
 from agent_pipeline.session_state import SessionState
 from agent_pipeline.workspace_loader import load_workspace_tools
@@ -123,3 +124,93 @@ def test_tokenize_tool_nonexistent_column(loaded_session):
 
     assert result["status"] == "error"
     assert "Column 'non_existent_col' not found" in result["message"]
+
+
+def test_list_files_tool():
+    """Tests list_files_tool against Known Answer #11 in TEST_FIXTURE.md."""
+    session = SessionState()
+    data_tools = make_tools(session)
+    list_files_tool = next(t for t in data_tools if t.name == "list_files_tool")
+
+    res = list_files_tool.invoke({"subdirectory": "newdataset"})
+
+    assert res["status"] == "success"
+    assert res["directories"] == []
+    assert res["files"] == ["Reddit-stock-sentiment.csv"]
+
+
+def test_check_missing_tool_known_answer_2(loaded_session):
+    """Tests check_missing_tool against Known Answer #2 in TEST_FIXTURE.md."""
+    data_tools = make_tools(loaded_session)
+    check_missing_tool = next(t for t in data_tools if t.name == "check_missing_tool")
+
+    res = check_missing_tool.invoke({"column": "text"})
+
+    assert res["status"] == "success"
+    assert res["total_rows"] == 8
+    assert res["n_missing"] == 1
+    assert res["missing_indices"] == [7]
+
+
+def test_check_duplicates_tool_known_answer_3():
+    """Tests check_duplicates_tool against Known Answer #3 in TEST_FIXTURE.md."""
+    session = SessionState()
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke(
+        {
+            "file_path": "agent_dev/sample_fixture.csv",
+            "text_column": "text",
+            "label_column": "label",
+        }
+    )
+
+    data_tools = make_tools(session)
+    check_duplicates_tool = next(t for t in data_tools if t.name == "check_duplicates_tool")
+
+    res_check = check_duplicates_tool.invoke({"column": "text", "drop": False})
+    assert res_check["status"] == "success"
+    assert res_check["n_duplicates"] == 1
+    assert res_check["n_rows_before"] == 8
+    assert res_check["n_rows_after"] == 8
+
+    res_drop = check_duplicates_tool.invoke({"column": "text", "drop": True})
+    assert res_drop["status"] == "success"
+    assert res_drop["n_rows_before"] == 8
+    assert res_drop["n_rows_after"] == 6
+    assert len(session.dataframe) == 6
+
+
+def test_sample_data_tool_known_answer_13(loaded_session):
+    """Tests sample_data_tool against Known Answer #13 in TEST_FIXTURE.md."""
+    data_tools = make_tools(loaded_session)
+    sample_data_tool = next(t for t in data_tools if t.name == "sample_data_tool")
+
+    res = sample_data_tool.invoke({"n": 4, "random_state": 42})
+
+    assert res["status"] == "success"
+    assert res["n_sampled"] == 4
+    assert res["sampled_indices"] == [1, 5, 0, 7]
+
+
+def test_describe_data_tool_known_answer_18(loaded_session):
+    """Tests describe_data_tool against Known Answer #18 in TEST_FIXTURE.md."""
+    data_tools = make_tools(loaded_session)
+    describe_data_tool = next(t for t in data_tools if t.name == "describe_data_tool")
+
+    res = describe_data_tool.invoke({"column": "text"})
+
+    assert res["status"] == "success"
+    
+    overall = res["overall_stats"]
+    assert overall["count"] == 8
+    assert np.isclose(overall["mean"], 19.875, atol=1e-3)
+    assert np.isclose(overall["std"], 9.4330, atol=1e-3)
+
+    cat_stats = res["category_stats"]
+    assert np.isclose(cat_stats["catA"]["mean"], 17.25, atol=1e-3)
+    assert np.isclose(cat_stats["catB"]["mean"], 22.5, atol=1e-3)
+
+    # Verify plot set on pending_figure
+    assert loaded_session.pending_figure is not None
