@@ -1,5 +1,3 @@
-# Your report
-
 # Agentic Pipeline Analysis Report
 
 I started by exploring the dataset and checking text distributions using `describe_data_tool`, (`result_id: describe_data_5` saved as `../plots/許家炘_agentic-pipeline_plot_describe_data_5.png`), which showed consistent lengths across categories without missing values. After tokenization, agent built the document-term matrix with `build_dtm_tool` (`result_id: build_dtm_7`), resulting in an 8x5 matrix with 47.5% sparsity. Looking at term frequencies via `term_frequency_tool` (`result_id: term_frequency_8`) and visualizing it with `dtm_heatmap_tool` (`result_id: dtm_heatmap_9`, saved as `../plots/許家炘_agentic-pipeline_plot_dtm_heatmap_9.png`), we saw that terms like always and gamma were the most common.
